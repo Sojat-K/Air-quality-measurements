@@ -1,0 +1,18 @@
+[Unit]
+Description=Indoor Aiq Quality Service
+After=network.target
+
+[Service]
+Environment=IOTHUB_DEVICE_CONNECTION_STRING="HostName=IAQ-hub.azure-devices.net;DeviceId=RPi-IAQ-proto-1;SharedAccessKey=UVtaFMqT185oWVmF7NqMpBbm7iKeTnPulqcHgqfKru8="
+Type=idle
+WorkingDirectory=/home/iaq/iaq-project-2022/
+ExecStart=/usr/bin/python3.9 /home/iaq/iaq-project-2022/data_collection.py
+Restart=on-failure
+User=iaq
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+

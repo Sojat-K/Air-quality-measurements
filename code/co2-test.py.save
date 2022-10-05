@@ -1,0 +1,7 @@
+import mh_z19
+import sleep from time
+
+while(True)
+	val = mh_z19.read()
+	print(str(val))
+	sleep(1)
