@@ -1,0 +1,453 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "2600534724902568123"
+    }
+  },
+  "parameters": {
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "dev",
+      "allowedValues": [
+        "dev",
+        "prod"
+      ],
+      "metadata": {
+        "description": "The name of the environment. This must be either dev or prod, with dev set as default"
+      }
+    },
+    "solutionName": {
+      "type": "string",
+      "defaultValue": "[format('iaq{0}', uniqueString(resourceGroup().id))]",
+      "maxLength": 30,
+      "minLength": 5,
+      "metadata": {
+        "description": "The unique name of the solution. This is used to ensure that resource names are unique."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "West Europe",
+      "metadata": {
+        "description": "The Azure region into which the resources should be deployed. Defaults to West Europe"
+      }
+    }
+  },
+  "variables": {
+    "storageAccountName": "[format('{0}{1}', parameters('environmentName'), parameters('solutionName'))]",
+    "cosmosDbName": "[format('{0}-{1}-cosmos', parameters('environmentName'), parameters('solutionName'))]",
+    "serviceBusName": "[format('{0}-{1}-bus', parameters('environmentName'), parameters('solutionName'))]",
+    "serviceBusAuthRuleName": "RootManageSharedAccessKey",
+    "serviceBusQueueName": "bus-queue",
+    "serviceBusQueueAuthRuleName": "iothubroutes_IAQ",
+    "hostingPlanName": "[format('iaq{0}-hosting', uniqueString(resourceGroup().id))]",
+    "appInsightsName": "[format('iaq{0}-appInsights', uniqueString(resourceGroup().id))]",
+    "csvDataLakeWriterName": "[format('iaq{0}-csv-writer', uniqueString(resourceGroup().id))]",
+    "measurementInsertName": "[format('iaq{0}-measurement-insert', uniqueString(resourceGroup().id))]",
+    "iotHubName": "[format('iaq{0}-iot-hub', uniqueString(resourceGroup().id))]",
+    "cosmosDbLocations": [
+      {
+        "locationName": "North Europe",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-09-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "isHnsEnabled": true
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[variables('cosmosDbName')]",
+      "kind": "GlobalDocumentDB",
+      "location": "[variables('cosmosDbLocations')[0].locationName]",
+      "properties": {
+        "databaseAccountOfferType": "Standard",
+        "locations": "[variables('cosmosDbLocations')]",
+        "capabilities": [
+          {
+            "name": "EnableServerless"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', variables('cosmosDbName'), 'indoor_airquality')]",
+      "properties": {
+        "resource": {
+          "id": "indoor_airquality"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', variables('cosmosDbName'), 'indoor_airquality', 'measurements')]",
+      "properties": {
+        "resource": {
+          "id": "measurements",
+          "partitionKey": {
+            "paths": [
+              "/deviceId"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ]
+          },
+          "defaultTtl": 5184000
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('cosmosDbName'), 'indoor_airquality')]"
+      ]
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces",
+      "apiVersion": "2022-01-01-preview",
+      "name": "[variables('serviceBusName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "minimumTlsVersion": "1.0",
+        "publicNetworkAccess": "Enabled",
+        "zoneRedundant": false
+      }
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces/AuthorizationRules",
+      "apiVersion": "2022-01-01-preview",
+      "name": "[format('{0}/{1}', variables('serviceBusName'), variables('serviceBusAuthRuleName'))]",
+      "properties": {
+        "rights": [
+          "Listen",
+          "Manage",
+          "Send"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces/queues",
+      "apiVersion": "2022-01-01-preview",
+      "name": "[format('{0}/{1}', variables('serviceBusName'), variables('serviceBusQueueName'))]",
+      "properties": {
+        "maxDeliveryCount": 10,
+        "enablePartitioning": false,
+        "enableExpress": false,
+        "maxMessageSizeInKilobytes": 256,
+        "maxSizeInMegabytes": 1024
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces/queues/authorizationRules",
+      "apiVersion": "2022-01-01-preview",
+      "name": "[format('{0}/{1}/{2}', variables('serviceBusName'), variables('serviceBusQueueName'), variables('serviceBusQueueAuthRuleName'))]",
+      "properties": {
+        "rights": [
+          "Send"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces/queues', variables('serviceBusName'), variables('serviceBusQueueName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-03-01",
+      "name": "[variables('hostingPlanName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Y1",
+        "tier": "Dynamic"
+      },
+      "kind": "functionapp"
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-03-01",
+      "name": "[variables('csvDataLakeWriterName')]",
+      "location": "[parameters('location')]",
+      "kind": "functionapp",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "appSettings": [
+            {
+              "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).InstrumentationKey]"
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2021-09-01').keys[0].value)]"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~4"
+            },
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "dotnet"
+            },
+            {
+              "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2021-09-01').keys[0].value)]"
+            },
+            {
+              "name": "WritingTimer",
+              "value": "0 0 * * * *"
+            },
+            {
+              "name": "CosmosDB_Connection",
+              "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbName')), '2022-05-15').connectionStrings[0].connectionString]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbName'))]",
+        "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-03-01",
+      "name": "[variables('measurementInsertName')]",
+      "location": "[parameters('location')]",
+      "kind": "functionapp",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "appSettings": [
+            {
+              "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).InstrumentationKey]"
+            },
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2021-09-01').keys[0].value)]"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~4"
+            },
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "dotnet"
+            },
+            {
+              "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+              "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2021-09-01').keys[0].value)]"
+            },
+            {
+              "name": "QueueConnectionString",
+              "value": "[listKeys(resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusName')), '2022-01-01-preview').primaryConnectionString]"
+            },
+            {
+              "name": "CosmosDBConnection",
+              "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbName')), '2022-05-15').connectionStrings[0].connectionString]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbName'))]",
+        "[resourceId('Microsoft.Web/serverfarms', variables('hostingPlanName'))]",
+        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2020-10-01",
+      "name": "iotHub",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "iotHubName": {
+            "value": "[variables('iotHubName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "serviceBusQueueApiVersion": {
+            "value": "2022-01-01-preview"
+          },
+          "serviceBusQueueId": {
+            "value": "[resourceId('Microsoft.ServiceBus/namespaces/queues', variables('serviceBusName'), variables('serviceBusQueueName'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.9.1.41621",
+              "templateHash": "17569567348300601236"
+            }
+          },
+          "parameters": {
+            "iotHubName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "serviceBusQueueId": {
+              "type": "string"
+            },
+            "serviceBusQueueApiVersion": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Devices/IotHubs",
+              "apiVersion": "2021-07-02",
+              "name": "[parameters('iotHubName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "S1",
+                "capacity": 1
+              },
+              "identity": {
+                "type": "None"
+              },
+              "properties": {
+                "eventHubEndpoints": {
+                  "events": {
+                    "retentionTimeInDays": 1,
+                    "partitionCount": 4
+                  }
+                },
+                "routing": {
+                  "endpoints": {
+                    "serviceBusQueues": [
+                      {
+                        "name": "telemetry-to-function",
+                        "connectionString": "[listKeys(parameters('serviceBusQueueId'), parameters('serviceBusQueueApiVersion')).primaryConnectionString]"
+                      }
+                    ]
+                  },
+                  "enrichments": [
+                    {
+                      "key": "Add_deviceId",
+                      "value": "$deviceId",
+                      "endpointNames": [
+                        "telemetry-to-function"
+                      ]
+                    }
+                  ],
+                  "routes": [
+                    {
+                      "name": "telemetry_to_default",
+                      "source": "DeviceMessages",
+                      "condition": "true",
+                      "endpointNames": [
+                        "events"
+                      ],
+                      "isEnabled": true
+                    },
+                    {
+                      "name": "telemetry_to_queue",
+                      "source": "DeviceMessages",
+                      "condition": "true",
+                      "endpointNames": [
+                        "telemetry-to-function"
+                      ],
+                      "isEnabled": true
+                    }
+                  ],
+                  "fallbackRoute": {
+                    "source": "DeviceMessages",
+                    "isEnabled": true,
+                    "endpointNames": [
+                      "events"
+                    ]
+                  }
+                },
+                "messagingEndpoints": {
+                  "fileNotifications": {
+                    "lockDurationAsIso8601": "PT1M",
+                    "ttlAsIso8601": "PT1H",
+                    "maxDeliveryCount": 10
+                  }
+                },
+                "enableFileUploadNotifications": false,
+                "cloudToDevice": {
+                  "maxDeliveryCount": 10,
+                  "defaultTtlAsIso8601": "PT1H",
+                  "feedback": {
+                    "lockDurationAsIso8601": "PT1M",
+                    "ttlAsIso8601": "PT1H"
+                  }
+                },
+                "features": "None",
+                "disableLocalAuth": false,
+                "enableDataResidency": false,
+                "allowedFqdnList": []
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces/queues', variables('serviceBusName'), variables('serviceBusQueueName'))]"
+      ]
+    }
+  ]
+}
